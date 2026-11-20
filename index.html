@@ -9,6 +9,7 @@
 <body>
   <main class="container">
     <section class="card greeting">
+      <button id="theme-toggle" class="btn theme-toggle" type="button" aria-label="Toggle dark mode">🌙</button>
       <p id="time" class="time">--:--:--</p>
       <p id="date" class="date"></p>
       <h1 id="greeting"></h1>
@@ -16,6 +17,8 @@
 
     <section class="card">
       <h2>Focus Timer</h2>
+      <p id="mode-label" class="mode-label">Focus</p>
+      <p id="focus-task" class="focus-task"></p>
       <div id="timer-display" class="timer">25:00</div>
       <div class="row center">
         <button id="timer-start" class="btn primary">Start</button>
@@ -23,10 +26,20 @@
         <button id="timer-reset" class="btn">Reset</button>
       </div>
       <form id="timer-form" class="row center timer-setting">
-        <label for="timer-minutes">Minutes</label>
+        <label for="timer-minutes">Focus minutes</label>
         <input id="timer-minutes" type="number" min="1" max="180" value="25" required>
         <button type="submit" class="btn">Set</button>
       </form>
+    </section>
+
+    <section class="card">
+      <h2>Today</h2>
+      <div class="stats">
+        <div class="stat"><strong id="stat-sessions">0</strong><span>Sessions</span></div>
+        <div class="stat"><strong id="stat-minutes">0</strong><span>Focus minutes</span></div>
+        <div class="stat"><strong id="stat-done">0</strong><span>Tasks done</span></div>
+        <div class="stat"><strong id="stat-streak">0</strong><span>Day streak</span></div>
+      </div>
     </section>
 
     <section class="card">
