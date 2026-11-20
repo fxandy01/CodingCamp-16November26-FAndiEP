@@ -1,7 +1,8 @@
 'use strict';
 
 /* ---------- Storage helpers ---------- */
-const KEYS = { tasks: 'pd_tasks', links: 'pd_links', minutes: 'pd_minutes', sort: 'pd_sort' };
+const KEYS = { tasks: 'pd_tasks', links: 'pd_links', minutes: 'pd_minutes', sort: 'pd_sort',
+  stats: 'pd_stats', focus: 'pd_focus', theme: 'pd_theme' };
 
 function load(key, fallback) {
   try {
@@ -22,6 +23,37 @@ function save(key, value) {
 
 const $ = (id) => document.getElementById(id);
 
+function dateKey(date) {
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${m}-${d}`;
+}
+
+const todayKey = () => dateKey(new Date());
+
+function yesterdayKey() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return dateKey(d);
+}
+
+/* ---------- Theme ---------- */
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  $('theme-toggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+function initTheme() {
+  const saved = load(KEYS.theme, null);
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved || (prefersDark ? 'dark' : 'light'));
+  $('theme-toggle').addEventListener('click', () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    save(KEYS.theme, next);
+    applyTheme(next);
+  });
+}
+
 /* ---------- Greeting ---------- */
 function updateClock() {
   const now = new Date();
@@ -36,17 +68,106 @@ function updateClock() {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
   });
   $('greeting').textContent = greeting;
+
+  if (stats.date !== todayKey()) {
+    rollStats();
+    renderStats();
+    renderTasks();
+  }
+}
+
+/* ---------- Daily stats ---------- */
+const BREAK_MINUTES = 5;
+const LONG_BREAK_MINUTES = 15;
+const SESSIONS_PER_CYCLE = 4;
+
+let stats = load(KEYS.stats, { date: '', sessions: 0, minutes: 0, streak: 0, lastActive: '', cycle: 0 });
+
+function rollStats() {
+  if (stats.date === todayKey()) return;
+  stats.date = todayKey();
+  stats.sessions = 0;
+  stats.minutes = 0;
+  save(KEYS.stats, stats);
+}
+
+function currentStreak() {
+  const active = stats.lastActive === todayKey() || stats.lastActive === yesterdayKey();
+  return active ? stats.streak : 0;
+}
+
+function tasksDoneToday() {
+  const today = todayKey();
+  return tasks.filter((t) => t.done && t.doneDate === today).length;
+}
+
+function renderStats() {
+  $('stat-sessions').textContent = stats.sessions;
+  $('stat-minutes').textContent = stats.minutes;
+  $('stat-done').textContent = tasksDoneToday();
+  $('stat-streak').textContent = currentStreak();
+}
+
+function recordFocusSession() {
+  rollStats();
+  stats.sessions += 1;
+  stats.minutes += timerMinutes;
+  stats.cycle += 1;
+
+  if (stats.lastActive !== todayKey()) {
+    stats.streak = stats.lastActive === yesterdayKey() ? stats.streak + 1 : 1;
+    stats.lastActive = todayKey();
+  }
+  save(KEYS.stats, stats);
+
+  const task = tasks.find((t) => t.id === focusTaskId);
+  if (task) {
+    task.sessions = (task.sessions || 0) + 1;
+    save(KEYS.tasks, tasks);
+    renderTasks();
+  }
+  renderStats();
 }
 
 /* ---------- Focus timer ---------- */
 let timerMinutes = load(KEYS.minutes, 25);
+let mode = 'focus'; // 'focus' | 'break' | 'long'
 let remaining = timerMinutes * 60;
 let timerId = null;
+
+const MODE_LABELS = { focus: 'Focus', break: 'Short break', long: 'Long break' };
+
+function modeMinutes() {
+  if (mode === 'break') return BREAK_MINUTES;
+  if (mode === 'long') return LONG_BREAK_MINUTES;
+  return timerMinutes;
+}
 
 function renderTimer() {
   const m = String(Math.floor(remaining / 60)).padStart(2, '0');
   const s = String(remaining % 60).padStart(2, '0');
   $('timer-display').textContent = `${m}:${s}`;
+  $('mode-label').textContent = MODE_LABELS[mode];
+  document.title = `${m}:${s} - ${MODE_LABELS[mode]}`;
+}
+
+function renderFocusTask() {
+  const el = $('focus-task');
+  if (mode !== 'focus') {
+    el.textContent = 'Take a break and rest your eyes.';
+    return;
+  }
+  const task = tasks.find((t) => t.id === focusTaskId);
+  el.textContent = task
+    ? `Working on: ${task.text} (🍅 ${task.sessions || 0})`
+    : 'No focus task selected. Pick one with the Focus button below.';
+}
+
+function setMode(newMode) {
+  mode = newMode;
+  remaining = modeMinutes() * 60;
+  renderTimer();
+  renderFocusTask();
 }
 
 function stopTimer() {
@@ -54,21 +175,34 @@ function stopTimer() {
   timerId = null;
 }
 
+function finishSession() {
+  stopTimer();
+  let message;
+  if (mode === 'focus') {
+    recordFocusSession();
+    const long = stats.cycle % SESSIONS_PER_CYCLE === 0;
+    setMode(long ? 'long' : 'break');
+    message = long ? 'Great work! Time for a long break.' : 'Focus session complete! Time for a short break.';
+  } else {
+    setMode('focus');
+    message = 'Break is over. Ready for the next focus session?';
+  }
+  // Delay so the new timer state is painted before the blocking alert.
+  setTimeout(() => alert(message), 50);
+}
+
 function startTimer() {
   if (timerId !== null || remaining <= 0) return;
   timerId = setInterval(() => {
     remaining -= 1;
     renderTimer();
-    if (remaining <= 0) {
-      stopTimer();
-      alert('Time is up!');
-    }
+    if (remaining <= 0) finishSession();
   }, 1000);
 }
 
 function resetTimer() {
   stopTimer();
-  remaining = timerMinutes * 60;
+  remaining = modeMinutes() * 60;
   renderTimer();
 }
 
@@ -78,13 +212,15 @@ function setTimerMinutes(event) {
   if (!value || value < 1 || value > 180) return;
   timerMinutes = value;
   save(KEYS.minutes, value);
-  resetTimer();
+  stopTimer();
+  setMode('focus');
 }
 
 /* ---------- To-do list ---------- */
 let tasks = load(KEYS.tasks, []);
 let sortMode = load(KEYS.sort, 'newest');
 let editingId = null;
+let focusTaskId = load(KEYS.focus, null);
 
 function normalize(text) {
   return text.trim().toLowerCase();
@@ -153,8 +289,19 @@ function renderTasks() {
     } else {
       const span = document.createElement('span');
       span.className = 'task-text';
+      if (task.id === focusTaskId) span.classList.add('focused');
       span.textContent = task.text;
       li.appendChild(span);
+      if (task.sessions) {
+        const count = document.createElement('span');
+        count.className = 'pomodoros';
+        count.textContent = `🍅 ${task.sessions}`;
+        count.title = 'Completed focus sessions';
+        li.appendChild(count);
+      }
+      const focusBtn = makeButton('Focus', task.id === focusTaskId ? 'active' : '', () => toggleFocus(task.id));
+      focusBtn.setAttribute('aria-pressed', String(task.id === focusTaskId));
+      li.appendChild(focusBtn);
       li.appendChild(makeButton('Edit', '', () => startEdit(task.id)));
       li.appendChild(makeButton('Delete', 'danger', () => deleteTask(task.id)));
       list.appendChild(li);
@@ -181,15 +328,33 @@ function toggleTask(id) {
   const task = tasks.find((t) => t.id === id);
   if (!task) return;
   task.done = !task.done;
+  task.doneDate = task.done ? todayKey() : null;
+  if (task.done && focusTaskId === id) setFocusTask(null);
   save(KEYS.tasks, tasks);
   renderTasks();
+  renderStats();
+  renderFocusTask();
+}
+
+function setFocusTask(id) {
+  focusTaskId = id;
+  save(KEYS.focus, id);
+}
+
+function toggleFocus(id) {
+  setFocusTask(focusTaskId === id ? null : id);
+  renderTasks();
+  renderFocusTask();
 }
 
 function deleteTask(id) {
   tasks = tasks.filter((t) => t.id !== id);
   if (editingId === id) editingId = null;
+  if (focusTaskId === id) setFocusTask(null);
   save(KEYS.tasks, tasks);
   renderTasks();
+  renderStats();
+  renderFocusTask();
 }
 
 function startEdit(id) {
@@ -220,6 +385,7 @@ function saveEdit(id, value) {
   save(KEYS.tasks, tasks);
   showTaskMessage('');
   renderTasks();
+  renderFocusTask();
 }
 
 function changeSort() {
@@ -294,11 +460,15 @@ function deleteLink(id) {
 
 /* ---------- Init ---------- */
 function init() {
+  initTheme();
+  rollStats();
   updateClock();
   setInterval(updateClock, 1000);
 
   $('timer-minutes').value = timerMinutes;
   renderTimer();
+  renderFocusTask();
+  renderStats();
   $('timer-start').addEventListener('click', startTimer);
   $('timer-stop').addEventListener('click', stopTimer);
   $('timer-reset').addEventListener('click', resetTimer);
